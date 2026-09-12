@@ -119,7 +119,7 @@ stop
 
 `mode eeg` 是默认 SRB2 公共参考、gain 24 配置。改变输出格式、采样率、板数、模式或通道掩码前必须先停止采集。
 
-文本命令只用于人工 Bring-up。正式上位机应使用 [BCIKit Device Control Protocol v1](../../../protocol/BCIKit_Device_Control_Protocol_v1.md)，它提供带 CRC 和 `request_id` 的命令、ACK、设备能力和状态帧。Python 行为参考实现位于 [`sdk/python/bcikit_protocol.py`](../../../sdk/python/bcikit_protocol.py)。
+文本命令只用于人工 Bring-up。正式上位机应使用 BCIKit Device Control Protocol v1，采用带 CRC 和 `request_id` 的命令、ACK、设备能力和状态帧；协议字段以主项目发布的协议版本为准。
 
 ## 5. OpenBCI 兼容模式
 
@@ -217,7 +217,7 @@ ESP32 会主动连接电脑监听的 TCP 端口，然后把标准 OpenBCI raw pa
 {"ip":"192.168.4.2","port":12345,"output":"bcikit","delimiter":false,"latency":10000}
 ```
 
-此时网络中传输完整的 BCIKit Raw Stream v1 帧。详细接口见 [OpenBCI WiFi 兼容说明](../../../protocol/OpenBCI_WiFi_Compatibility.md)，电脑端测试见 [`bcikit_wifi_smoke.py`](../../../sdk/python/bcikit_wifi_smoke.py)。
+此时网络中传输完整的 BCIKit Raw Stream v1 帧。OpenBCI WiFi 兼容接口和电脑端测试工具不包含在本独立固件仓库中。
 
 v0.5.0 起，该 TCP 连接同时接收 BCIKit COMMAND；v0.6.0 增加自动认领与首会话锁定。v0.6.1 修正多板菊花链不能使用单板 ID 作为连接门槛的问题。推荐握手为：
 
@@ -231,7 +231,7 @@ ACK、DEVICE_INFO、DEVICE_STATUS 和 SAMPLE 都从同一 TCP 字节流返回，
 
 OpenBCI GUI 继续发送 `output="raw"`，因此无需修改；自研软件发送 `output="auto"` 后以有效 BCIKit COMMAND 完成识别。一个协议会话存在时，来自冲突协议或不同监听端口的 `/tcp`、`/udp`、`/command` 或 `/stream/start` 返回 HTTP `409 BUSY`；完全相同的 POST 重试保持幂等。`DELETE /tcp`、`DELETE /udp` 或 TCP 实际断开会停止采集并释放所有权。`GET /all` 和 `GET /tcp` 的 `session` 字段为 `none`、`auto`、`openbci` 或 `bcikit`。
 
-正式自研上位机请从 [BCIKit 上位机协议文档入口](../../../protocol/README.md) 开始，并以 [上位机集成指南](../../../protocol/BCIKit_Host_Integration_Guide_v1.md) 和 [BCIKit WiFi Transport Profile v1](../../../protocol/BCIKit_WiFi_Transport_v1.md) 为实现合同，不需要依赖 OpenBCI 数据格式。
+正式自研上位机请以主项目发布的 BCIKit 上位机协议和集成指南为实现合同，不需要依赖 OpenBCI 数据格式；本仓库只负责 ESP32 设备端实现。
 
 ## 7. BCIKit BLE
 
@@ -239,7 +239,7 @@ OpenBCI GUI 继续发送 `output="raw"`，因此无需修改；自研软件发�
 
 BLE 和 WiFi 的原生会话互斥。BLE 端订阅通知并成功发送首个 CRC 正确的 BCIKit COMMAND 后取得设备会话；此时 WiFi 的建链、命令和启动请求返回 HTTP `409 BUSY`。反之，只要 WiFi 已配置数据目标，BLE 命令会收到 `ACK(STATUS_BUSY)`。BLE 断开时固件自动 STOP、清空待处理命令并释放会话。
 
-BLE V1 为保证稳定性，正式支持范围为：单板 250/500 SPS，双板 250 SPS。三、四板及双板 500 SPS 的 `START` 会返回失败；如需更高吞吐量，请使用 WiFi TCP。完整 UUID、分包和上位机接入顺序见 [BCIKit BLE Transport Profile v1](../../../protocol/BCIKit_BLE_Transport_v1.md)。
+BLE V1 为保证稳定性，正式支持范围为：单板 250/500 SPS，双板 250 SPS。三、四板及双板 500 SPS 的 `START` 会返回失败；如需更高吞吐量，请使用 WiFi TCP。UUID、分包和上位机接入顺序以主项目协议版本为准。
 
 ## 8. 多板规则
 
