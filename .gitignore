@@ -1,0 +1,5 @@
+# Arduino IDE and arduino-cli build output
+build/
+*.bin
+*.elf
+*.map
