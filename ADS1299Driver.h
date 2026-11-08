@@ -17,6 +17,7 @@ struct ADS1299Settings {
   uint16_t sampleRateHz = BCIKitConfig::DEFAULT_SAMPLE_RATE_HZ;
   ADS1299Profile profile = ADS1299Profile::EegSrb2;
   uint8_t channelEnabledMask = 0xFF;
+  uint8_t gainCode = 6;  // ADS1299 GAIN[2:0]: 6 = 24x.
   uint8_t testSignalConfig2 = 0xD0;
 };
 

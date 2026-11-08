@@ -64,6 +64,7 @@ bool ADS1299Driver::begin(const ADS1299Settings &settings) {
 bool ADS1299Driver::reconfigure(const ADS1299Settings &settings) {
   if (settings.boardCount < 1 ||
       settings.boardCount > BCIKitConfig::MAX_BOARD_COUNT ||
+      settings.gainCode > 6 ||
       (settings.sampleRateHz != 250 && settings.sampleRateHz != 500 &&
        settings.sampleRateHz != 1000) ||
       (settings.profile == ADS1299Profile::InternalTest &&
@@ -317,7 +318,8 @@ ADS1299Driver::RegisterProfile ADS1299Driver::makeProfile(
 
   for (uint8_t i = 0; i < 8; ++i) {
     p.channel[i] = (settings.channelEnabledMask & (1u << i)) != 0
-                       ? channelValue
+                       ? static_cast<uint8_t>((channelValue & 0x8F) |
+                                              (settings.gainCode << 4))
                        : 0x81;  // powered down, gain 1, input shorted
   }
   p.biasSensp &= settings.channelEnabledMask;

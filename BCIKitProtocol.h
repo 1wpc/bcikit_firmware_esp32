@@ -35,6 +35,7 @@ enum class CommandId : uint8_t {
   SetChannelMask = 0x09,
   ResetStats = 0x0A,
   Ping = 0x0B,
+  SetGain = 0x0C,
 };
 
 enum class CommandStatus : uint8_t {
@@ -63,6 +64,7 @@ constexpr uint32_t CAP_WIFI_BCIKIT_CONTROL = 1u << 11;
 constexpr uint32_t CAP_AUTO_PROTOCOL_SESSION = 1u << 12;
 constexpr uint32_t CAP_BLE_BCIKIT_STREAM = 1u << 13;
 constexpr uint32_t CAP_BLE_BCIKIT_CONTROL = 1u << 14;
+constexpr uint32_t CAP_UNIFORM_PGA_GAIN = 1u << 15;
 
 constexpr uint16_t FLAG_TIME_VALID = 1u << 0;
 constexpr uint16_t FLAG_DROPPED_BEFORE = 1u << 1;

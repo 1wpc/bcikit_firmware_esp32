@@ -1,4 +1,4 @@
-# BCIKit AFE8 ESP32-DevKitC V4 Arduino 固件 v0.7.12
+# BCIKit AFE8 ESP32-DevKitC V4 Arduino 固件 v0.7.13
 
 这是 BCIKit AFE8 新板面向经典 ESP32-DevKitC V4 的参考固件，可直接使用 Arduino IDE 打开和编译。
 
@@ -37,7 +37,7 @@
 6. CPU Frequency 选择 `240MHz`，Flash Size/Partition Scheme 按实际模组选择。
 7. 上传后打开串口，波特率设为 `115200`，行尾选 `Newline`。
 
-ESP32-DevKitC V4 使用板载 USB-UART 桥接芯片，并没有 ESP32-S3 那样的原生 USB CDC。v0.7.12 将 UART0 固定为 115200，主要用于日志、控制和 OpenBCI 8 通道 250 SPS 兼容输出；BCIKit 原生数据和双向机器控制通过 WiFi TCP 或 BLE 传输。BLE 流式传输在控制命令到达时会暂时让出通知队列，并对短暂的控制器拥塞进行有限重试，避免状态命令被数据流饿死；同时请求 251 字节 BLE 数据长度扩展。双板通知最多合并两帧，避免 macOS 控制器信用不足时大 ATT 通知阻塞发送任务。
+ESP32-DevKitC V4 使用板载 USB-UART 桥接芯片，并没有 ESP32-S3 那样的原生 USB CDC。v0.7.13 将 UART0 固定为 115200，主要用于日志、控制和 OpenBCI 8 通道 250 SPS 兼容输出；BCIKit 原生数据和双向机器控制通过 WiFi TCP 或 BLE 传输。BLE 流式传输在控制命令到达时会暂时让出通知队列，并对短暂的控制器拥塞进行有限重试，避免状态命令被数据流饿死；同时请求 251 字节 BLE 数据长度扩展。双板通知最多合并两帧，避免 macOS 控制器信用不足时大 ATT 通知阻塞发送任务。
 
 ## 2. ESP32-DevKitC V4 引脚
 
@@ -118,6 +118,10 @@ stop
 ```
 
 `mode eeg` 是默认 SRB2 公共参考、gain 24 配置。改变输出格式、采样率、板数、模式或通道掩码前必须先停止采集。
+
+原生上位机可发送 `SET_GAIN (0x0C)`，payload 为单字节 ADS1299 gain code：`0..6` 对应 `1、2、4、6、8、12、24` 倍。命令仅在停止采集时生效，统一设置所有板的启用通道；关闭的通道仍保持掉电短接。成功后通过 `GET_STATUS.gain_code` 读回，后续 `SAMPLE.gain_code` 同步更新。固件通过 `DEVICE_INFO.capabilities` bit15 声明支持，旧版固件没有该位时上位机应维持 24 倍。OpenBCI Cyton 兼容输出没有携带增益元数据，因此仅允许 24 倍；自研上位机应使用 BCIKit 原生流。
+
+完整命令帧、应答和换算流程见 [上位机 PGA 增益对接说明](HOST_PGA_GAIN.md)。
 
 文本命令只用于人工 Bring-up。正式上位机应使用 BCIKit Device Control Protocol v1，采用带 CRC 和 `request_id` 的命令、ACK、设备能力和状态帧；协议字段以主项目发布的协议版本为准。
 

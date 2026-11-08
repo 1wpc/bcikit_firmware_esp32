@@ -209,7 +209,7 @@ void acquisitionTask(void *) {
     sample.flags = modeFlags();
     sample.sampleRateHz = activeSettings.sampleRateHz;
     sample.boardCount = activeSettings.boardCount;
-    sample.gainCode = 6;  // ADS1299 gain 24 encoding.
+    sample.gainCode = activeSettings.gainCode;
     sample.payloadLength = static_cast<uint16_t>(
         activeSettings.boardCount * BCIKitConfig::BYTES_PER_BOARD);
 
@@ -380,7 +380,7 @@ BCIKitProtocol::DeviceInfo deviceInfoSnapshot() {
   BCIKitProtocol::DeviceInfo info{};
   info.firmwareMajor = 0;
   info.firmwareMinor = 7;
-  info.firmwarePatch = 12;
+  info.firmwarePatch = 13;
   info.hardwareType = 1;  // ESP32-DevKitC host + BCIKit AFE8.
   info.capabilities =
       BCIKitProtocol::CAP_BCIKIT_RAW_V1 |
@@ -396,7 +396,8 @@ BCIKitProtocol::DeviceInfo deviceInfoSnapshot() {
       BCIKitProtocol::CAP_WIFI_BCIKIT_CONTROL |
       BCIKitProtocol::CAP_AUTO_PROTOCOL_SESSION |
       BCIKitProtocol::CAP_BLE_BCIKIT_STREAM |
-      BCIKitProtocol::CAP_BLE_BCIKIT_CONTROL;
+      BCIKitProtocol::CAP_BLE_BCIKIT_CONTROL |
+      BCIKitProtocol::CAP_UNIFORM_PGA_GAIN;
   info.maxBoardCount = BCIKitConfig::MAX_BOARD_COUNT;
   info.sampleRateMask = 0x03;   // bit0=250 SPS, bit1=500 SPS.
   info.outputFormatMask = 0x03; // bit0=BCIKit, bit1=OpenBCI Cyton.
@@ -413,7 +414,7 @@ BCIKitProtocol::DeviceStatus deviceStatusSnapshot() {
   result.profile = static_cast<uint8_t>(activeSettings.profile);
   result.boardCount = activeSettings.boardCount;
   result.sampleRateHz = activeSettings.sampleRateHz;
-  result.gainCode = 6;
+  result.gainCode = activeSettings.gainCode;
   result.channelEnabledMask = activeSettings.channelEnabledMask;
   result.registerVerified = ads1299.registerVerified() ? 1 : 0;
   result.adsId = ads1299.cachedId();
@@ -488,6 +489,7 @@ bool updateSettings(const ADS1299Settings &requested) {
       requested.sampleRateHz == activeSettings.sampleRateHz &&
       requested.profile == activeSettings.profile &&
       requested.channelEnabledMask == activeSettings.channelEnabledMask &&
+      requested.gainCode == activeSettings.gainCode &&
       requested.testSignalConfig2 == activeSettings.testSignalConfig2;
   // Desktop handshakes intentionally resend the complete desired
   // configuration on every connection.  Treat an already-applied and still
@@ -583,7 +585,7 @@ void printInfo() {
       "capabilities=bcikit_raw_v1,openbci_cyton_8ch,binary_control,"
       "wifi_tcp_udp_ssdp,wifi_bcikit_control,auto_protocol_session,"
       "ble_bcikit_stream,ble_bcikit_control,250_500_sps,1_4_boards,"
-      "channel_mask,test,short");
+      "channel_mask,uniform_pga_gain,test,short");
 }
 
 void processControlRequest(const BCIKitProtocol::ControlRequest &request,
@@ -653,7 +655,7 @@ void processControlRequest(const BCIKitProtocol::ControlRequest &request,
       if ((transport == ControlTransport::WiFiTcp &&
            requested != BCIKitProtocol::OutputFormat::BCIKitRawV1) ||
           (requested == BCIKitProtocol::OutputFormat::OpenBCICyton &&
-           activeSettings.boardCount != 1)) {
+           (activeSettings.boardCount != 1 || activeSettings.gainCode != 6))) {
         reply(CommandStatus::InvalidValue);
         return;
       }
@@ -738,6 +740,29 @@ void processControlRequest(const BCIKitProtocol::ControlRequest &request,
                                       : CommandStatus::ApplyFailed);
       return;
     }
+    case CommandId::SetGain: {
+      if (!requireLength(1)) {
+        return;
+      }
+      if (acquiring) {
+        reply(CommandStatus::Busy);
+        return;
+      }
+      if (request.payload[0] > 6) {
+        reply(CommandStatus::InvalidValue);
+        return;
+      }
+      if (outputFormat == BCIKitProtocol::OutputFormat::OpenBCICyton &&
+          request.payload[0] != 6) {
+        reply(CommandStatus::Unsupported);
+        return;
+      }
+      ADS1299Settings requested = activeSettings;
+      requested.gainCode = request.payload[0];
+      reply(updateSettings(requested) ? CommandStatus::Ok
+                                      : CommandStatus::ApplyFailed);
+      return;
+    }
     case CommandId::ResetStats:
       if (!requireLength(0)) {
         return;
@@ -796,7 +821,7 @@ void processBleNativeBytes(const uint8_t *data, size_t length) {
 void printOpenBCIStartup() {
   Serial.println("OpenBCI V3 8-16 channel");
   Serial.printf("ADS1299 Device ID: 0x%02X\n", ads1299.cachedId());
-  Serial.println("Firmware: BCIKit v0.7.12");
+  Serial.println("Firmware: BCIKit v0.7.13");
   Serial.println("$$$");
 }
 
@@ -884,7 +909,7 @@ void processOpenBCICommand(char command) {
     return;
   }
   if (command == 'V') {
-    Serial.println("v0.7.12$$$");
+    Serial.println("v0.7.13$$$");
     return;
   }
   if (command == 'v') {
@@ -990,7 +1015,7 @@ String processWifiOpenBCICommand(const String &command) {
     return "OK";
   }
   if (command == "V") {
-    return "v0.7.12$$$";
+    return "v0.7.13$$$";
   }
   if (command == "v") {
     stopAcquisition();
@@ -999,7 +1024,7 @@ String processWifiOpenBCICommand(const String &command) {
     defaults.sampleRateHz = 250;
     outputFormat = BCIKitProtocol::OutputFormat::OpenBCICyton;
     return updateSettings(defaults)
-               ? "OpenBCI V3 8-16 channel\nFirmware: BCIKit v0.7.12\n$$$"
+               ? "OpenBCI V3 8-16 channel\nFirmware: BCIKit v0.7.13\n$$$"
                : "Failure: ADS1299 configuration failed$$$";
   }
   if (command == "?") {
@@ -1122,8 +1147,8 @@ void processCommand(String command) {
     outputFormat = BCIKitProtocol::OutputFormat::BCIKitRawV1;
     Serial.println("OK output BCIKit Raw Stream v1");
   } else if (command == "output openbci") {
-    if (activeSettings.boardCount != 1) {
-      Serial.println("ERR OpenBCI mode requires boards 1");
+    if (activeSettings.boardCount != 1 || activeSettings.gainCode != 6) {
+      Serial.println("ERR OpenBCI mode requires boards 1 and gain 24");
       return;
     }
     outputFormat = BCIKitProtocol::OutputFormat::OpenBCICyton;
@@ -1149,7 +1174,7 @@ void setup() {
   Serial.begin(BCIKitConfig::SERIAL_BAUD);
   delay(800);
   Serial.println();
-  Serial.println("BCIKit AFE8 ESP32-DevKitC firmware v0.7.12");
+  Serial.println("BCIKit AFE8 ESP32-DevKitC firmware v0.7.13");
 
   drdyQueue = xQueueCreate(BCIKitConfig::DRDY_QUEUE_DEPTH, sizeof(uint64_t));
   sampleQueue = xQueueCreate(BCIKitConfig::SAMPLE_QUEUE_DEPTH,
