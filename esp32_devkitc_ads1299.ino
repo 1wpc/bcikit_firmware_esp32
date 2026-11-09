@@ -37,6 +37,9 @@ volatile BCIKitProtocol::OutputFormat outputFormat =
 QueueHandle_t drdyQueue = nullptr;
 QueueHandle_t sampleQueue = nullptr;
 SemaphoreHandle_t serialWriteMutex = nullptr;
+// The acquisition task and control handlers run on different cores. All ADS
+// SPI operations must be serialized, especially STOP followed by SET_GAIN.
+SemaphoreHandle_t adsSpiMutex = nullptr;
 TaskHandle_t acquisitionTaskHandle = nullptr;
 TaskHandle_t transportTaskHandle = nullptr;
 
@@ -119,7 +122,9 @@ void stopAcquisition() {
   }
   acquiring = false;
   detachInterrupt(digitalPinToInterrupt(BCIKitConfig::PIN_ADS_DRDY));
+  xSemaphoreTake(adsSpiMutex, portMAX_DELAY);
   ads1299.stopContinuous();
+  xSemaphoreGive(adsSpiMutex);
   xQueueReset(drdyQueue);
   xQueueReset(sampleQueue);
 }
@@ -155,7 +160,9 @@ bool startAcquisition() {
   portENTER_CRITICAL(&statsMux);
   ++acquisitionEpoch;
   portEXIT_CRITICAL(&statsMux);
+  xSemaphoreTake(adsSpiMutex, portMAX_DELAY);
   acquiring = ads1299.startContinuous();
+  xSemaphoreGive(adsSpiMutex);
   if (!acquiring) {
     return false;
   }
@@ -213,7 +220,17 @@ void acquisitionTask(void *) {
     sample.payloadLength = static_cast<uint16_t>(
         activeSettings.boardCount * BCIKitConfig::BYTES_PER_BOARD);
 
-    if (!ads1299.readContinuousFrame(sample.payload, sample.payloadLength)) {
+    xSemaphoreTake(adsSpiMutex, portMAX_DELAY);
+    // STOP may have completed while this task was waiting for the bus. Do not
+    // let a stale DRDY event consume bytes from the newly configured ADC.
+    if (!acquiring || observedEpoch != acquisitionEpoch) {
+      xSemaphoreGive(adsSpiMutex);
+      continue;
+    }
+    const bool readOk =
+        ads1299.readContinuousFrame(sample.payload, sample.payloadLength);
+    xSemaphoreGive(adsSpiMutex);
+    if (!readOk) {
       portENTER_CRITICAL(&statsMux);
       ++stats.spiError;
       portEXIT_CRITICAL(&statsMux);
@@ -380,7 +397,7 @@ BCIKitProtocol::DeviceInfo deviceInfoSnapshot() {
   BCIKitProtocol::DeviceInfo info{};
   info.firmwareMajor = 0;
   info.firmwareMinor = 7;
-  info.firmwarePatch = 13;
+  info.firmwarePatch = 16;
   info.hardwareType = 1;  // ESP32-DevKitC host + BCIKit AFE8.
   info.capabilities =
       BCIKitProtocol::CAP_BCIKIT_RAW_V1 |
@@ -499,8 +516,10 @@ bool updateSettings(const ADS1299Settings &requested) {
     return true;
   }
   const ADS1299Settings previous = activeSettings;
+  xSemaphoreTake(adsSpiMutex, portMAX_DELAY);
   if (ads1299.reconfigure(requested)) {
     activeSettings = requested;
+    xSemaphoreGive(adsSpiMutex);
     return true;
   }
 
@@ -508,6 +527,7 @@ bool updateSettings(const ADS1299Settings &requested) {
   ++stats.registerVerifyError;
   portEXIT_CRITICAL(&statsMux);
   ads1299.reconfigure(previous);
+  xSemaphoreGive(adsSpiMutex);
   return false;
 }
 
@@ -821,7 +841,7 @@ void processBleNativeBytes(const uint8_t *data, size_t length) {
 void printOpenBCIStartup() {
   Serial.println("OpenBCI V3 8-16 channel");
   Serial.printf("ADS1299 Device ID: 0x%02X\n", ads1299.cachedId());
-  Serial.println("Firmware: BCIKit v0.7.13");
+  Serial.println("Firmware: BCIKit v0.7.16");
   Serial.println("$$$");
 }
 
@@ -909,7 +929,7 @@ void processOpenBCICommand(char command) {
     return;
   }
   if (command == 'V') {
-    Serial.println("v0.7.13$$$");
+    Serial.println("v0.7.16$$$");
     return;
   }
   if (command == 'v') {
@@ -1015,7 +1035,7 @@ String processWifiOpenBCICommand(const String &command) {
     return "OK";
   }
   if (command == "V") {
-    return "v0.7.13$$$";
+    return "v0.7.16$$$";
   }
   if (command == "v") {
     stopAcquisition();
@@ -1024,7 +1044,7 @@ String processWifiOpenBCICommand(const String &command) {
     defaults.sampleRateHz = 250;
     outputFormat = BCIKitProtocol::OutputFormat::OpenBCICyton;
     return updateSettings(defaults)
-               ? "OpenBCI V3 8-16 channel\nFirmware: BCIKit v0.7.13\n$$$"
+               ? "OpenBCI V3 8-16 channel\nFirmware: BCIKit v0.7.16\n$$$"
                : "Failure: ADS1299 configuration failed$$$";
   }
   if (command == "?") {
@@ -1174,14 +1194,15 @@ void setup() {
   Serial.begin(BCIKitConfig::SERIAL_BAUD);
   delay(800);
   Serial.println();
-  Serial.println("BCIKit AFE8 ESP32-DevKitC firmware v0.7.13");
+  Serial.println("BCIKit AFE8 ESP32-DevKitC firmware v0.7.16");
 
   drdyQueue = xQueueCreate(BCIKitConfig::DRDY_QUEUE_DEPTH, sizeof(uint64_t));
   sampleQueue = xQueueCreate(BCIKitConfig::SAMPLE_QUEUE_DEPTH,
                              sizeof(BCIKitProtocol::SampleRecord));
   serialWriteMutex = xSemaphoreCreateMutex();
+  adsSpiMutex = xSemaphoreCreateMutex();
   if (drdyQueue == nullptr || sampleQueue == nullptr ||
-      serialWriteMutex == nullptr) {
+      serialWriteMutex == nullptr || adsSpiMutex == nullptr) {
     Serial.println("FATAL queue allocation failed");
     return;
   }

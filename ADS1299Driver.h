@@ -84,6 +84,10 @@ class ADS1299Driver {
   ADS1299Settings settings_;
   bool registerVerified_ = false;
   bool continuous_ = false;
+  bool needsFullRestart_ = false;
   uint32_t measuredClockHz_ = 0;
   uint8_t deviceId_ = 0;
+  uint8_t verifyFailureAddress_ = 0xFF;
+  uint8_t verifyExpected_ = 0;
+  uint8_t verifyActual_ = 0;
 };

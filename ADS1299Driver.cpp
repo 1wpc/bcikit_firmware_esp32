@@ -89,7 +89,7 @@ bool ADS1299Driver::reconfigure(const ADS1299Settings &settings) {
   // Do not silently accept a failure: callers still receive ApplyFailed when
   // all attempts fail, which preserves detection of an unplugged/bad board.
   for (uint8_t attempt = 0; attempt < CONFIGURE_ATTEMPTS; ++attempt) {
-    if (boardCountChanged || attempt != 0) {
+    if (boardCountChanged || needsFullRestart_ || attempt != 0) {
       // A RESET pulse only resets registers; it is not sufficient to recover
       // every serial-chain state after the physical ROLE switches or return
       // route have changed. PWDN gives all attached AFEs a clean restart. Use
@@ -106,8 +106,12 @@ bool ADS1299Driver::reconfigure(const ADS1299Settings &settings) {
       deviceId_ = 0x00;
     }
     if (registerVerified_) {
+      needsFullRestart_ = false;
       return true;
     }
+    Serial.printf("WARN ADS verify attempt=%u reg=0x%02X expected=0x%02X actual=0x%02X id=0x%02X\n",
+                  static_cast<unsigned>(attempt + 1), verifyFailureAddress_,
+                  verifyExpected_, verifyActual_, deviceId_);
   }
   return false;
 }
@@ -141,11 +145,15 @@ bool ADS1299Driver::startContinuous() {
 }
 
 void ADS1299Driver::stopContinuous() {
-  digitalWrite(BCIKitConfig::PIN_ADS_START, LOW);
   if (continuous_) {
-    delayMicroseconds(10);
+    needsFullRestart_ = true;
+    // RDATAC keeps CS asserted across frame reads. End that transaction
+    // before SDATAC so the command starts on a fresh CS falling edge.
+    deselect();
+    delayMicroseconds(REGISTER_DECODE_DELAY_US);
     writeCommand(CMD_SDATAC);
   }
+  digitalWrite(BCIKitConfig::PIN_ADS_START, LOW);
   continuous_ = false;
 }
 
@@ -209,6 +217,13 @@ void ADS1299Driver::hardwareReset() {
 
 void ADS1299Driver::powerCycle() {
   digitalWrite(BCIKitConfig::PIN_ADS_START, LOW);
+  digitalWrite(BCIKitConfig::PIN_ADS_CS, HIGH);
+  // Reinitialize the ESP32 SPI peripheral as well as the AFE. A stopped
+  // RDATAC session can leave subsequent RREG transactions misaligned even
+  // after an ADS reset when the controller is kept alive across sessions.
+  spi_.end();
+  spi_.begin(BCIKitConfig::PIN_ADS_SCK, BCIKitConfig::PIN_ADS_MISO,
+             BCIKitConfig::PIN_ADS_MOSI, BCIKitConfig::PIN_ADS_CS);
   digitalWrite(BCIKitConfig::PIN_ADS_CS, HIGH);
   digitalWrite(BCIKitConfig::PIN_ADS_RESET, HIGH);
   digitalWrite(BCIKitConfig::PIN_ADS_PWDN, LOW);
@@ -328,6 +343,7 @@ ADS1299Driver::RegisterProfile ADS1299Driver::makeProfile(
 }
 
 bool ADS1299Driver::writeAndVerifyProfile(const RegisterProfile &p) {
+  verifyFailureAddress_ = 0xFF;
   const uint8_t configBlock[] = {p.config1, p.config2, p.config3, p.loff};
   writeRegisters(REG_CONFIG1, configBlock, sizeof(configBlock));
 
@@ -376,6 +392,11 @@ bool ADS1299Driver::writeAndVerifyProfile(const RegisterProfile &p) {
   ok &= verifyRegister(0x16, p.misc2, 0x00);
   ok &= verifyRegister(0x17, p.config4, 0x0F);
   deviceId_ = readRegister(REG_ID);
+  if (deviceId_ != 0x3E && verifyFailureAddress_ == 0xFF) {
+    verifyFailureAddress_ = REG_ID;
+    verifyExpected_ = 0x3E;
+    verifyActual_ = deviceId_;
+  }
   ok &= deviceId_ == 0x3E;
   writeRegisters(REG_CONFIG1, &p.config1, 1);
   return ok;
@@ -384,7 +405,13 @@ bool ADS1299Driver::writeAndVerifyProfile(const RegisterProfile &p) {
 bool ADS1299Driver::verifyRegister(uint8_t address, uint8_t expected,
                                   uint8_t writableMask) {
   const uint8_t actual = readRegister(address);
-  return (actual & writableMask) == (expected & writableMask);
+  const bool match = (actual & writableMask) == (expected & writableMask);
+  if (!match && verifyFailureAddress_ == 0xFF) {
+    verifyFailureAddress_ = address;
+    verifyExpected_ = expected & writableMask;
+    verifyActual_ = actual & writableMask;
+  }
+  return match;
 }
 
 void ADS1299Driver::select() {
